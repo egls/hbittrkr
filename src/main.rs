@@ -251,7 +251,11 @@ impl HabitGraph<'_> {
                     };
 
                     if current_date.day() == 1 {
-                        color = Color::Yellow;
+                        color = match self.data.get(&current_date) {
+                            Some(true) => Color::Rgb(255, 165, 0), // Orange for drank
+                            Some(false) => Color::Rgb(173, 255, 47), // GreenYellow for not drank
+                            None => Color::Yellow,
+                        };
                     }
 
                     if current_date == today {
