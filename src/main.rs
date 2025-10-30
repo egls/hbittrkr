@@ -101,8 +101,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                 KeyCode::Char(' ') => app.toggle_selected_day(),
                 KeyCode::Left => app.move_cursor_left(),
                 KeyCode::Right => app.move_cursor_right(),
-                KeyCode::Up => app.move_cursor_up(),
-                KeyCode::Down => app.move_cursor_down(),
+                KeyCode::Up => app.move_cursor_down(),
+                KeyCode::Down => app.move_cursor_up(),
                 _ => {}
             }
         }
@@ -117,6 +117,7 @@ fn ui(f: &mut Frame, app: &App) {
             [
                 Constraint::Length(3), // For title
                 Constraint::Min(0),    // For the graph
+                Constraint::Length(1), // For cursor date
                 Constraint::Length(3), // For instructions
                 Constraint::Length(1), // For legend
             ]
@@ -126,11 +127,8 @@ fn ui(f: &mut Frame, app: &App) {
 
     let title_block = Block::default()
         .borders(Borders::ALL)
-        .title("Habit Tracker - Alcohol Consumption");
-    let title = Paragraph::new(format!("Year {}", Local::now().year()))
-        .alignment(Alignment::Center);
+        .title(format!("Year {}", Local::now().year()));
     f.render_widget(title_block, chunks[0]);
-    f.render_widget(title, chunks[0]);
 
     let graph_chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -157,11 +155,14 @@ fn ui(f: &mut Frame, app: &App) {
     };
     f.render_widget(habit_graph, graph_area);
 
-    let instructions_block = Block::default().borders(Borders::ALL);
-    let instructions = Paragraph::new("Use arrow keys to move. Press <space> to toggle a day. Press <q> to quit.")
-        .alignment(Alignment::Center);
-    f.render_widget(instructions_block, chunks[2]);
-    f.render_widget(instructions, chunks[2]);
+    let cursor_date = app.cursor.format("%A %d.%m.%Y").to_string();
+    let cursor_date_paragraph = Paragraph::new(cursor_date).alignment(Alignment::Center);
+    f.render_widget(cursor_date_paragraph, chunks[2]);
+
+    let instructions_block = Block::default()
+        .borders(Borders::ALL)
+        .title("Use arrow keys to move. Press <space> to toggle a day. Press <q> to quit.");
+    f.render_widget(instructions_block, chunks[3]);
 
     let legend = Paragraph::new(Line::from(vec![
         Span::styled("■", Style::default().fg(Color::Red)),
@@ -176,7 +177,7 @@ fn ui(f: &mut Frame, app: &App) {
         Span::raw(" Cursor"),
     ]))
     .alignment(Alignment::Center);
-    f.render_widget(legend, chunks[3]);
+    f.render_widget(legend, chunks[4]);
 }
 
 struct HabitGraph<'a> {
