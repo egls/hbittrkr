@@ -1,4 +1,4 @@
-use chrono::{Datelike, Days, Local, NaiveDate, Weekday};
+use chrono::{Datelike, Days, Local, NaiveDate};
 use ratatui::crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -8,9 +8,14 @@ use ratatui::{
     prelude::*,
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{canvas::Canvas, Block, Borders, Paragraph, Widget},
+    widgets::{Block, Borders, Paragraph, Widget},
 };
 use std::{collections::HashMap, error::Error, io};
+
+enum ViewMode {
+    Year,
+    Month,
+}
 
 /// App holds the state of the application
 struct App {
@@ -18,6 +23,8 @@ struct App {
     alcohol_log: HashMap<NaiveDate, bool>,
     /// The currently selected date.
     cursor: NaiveDate,
+    /// The current view mode.
+    view_mode: ViewMode,
     /// Should the application exit?
     should_quit: bool,
 }
@@ -65,8 +72,13 @@ impl App {
         App {
             alcohol_log,
             cursor: today,
+            view_mode: ViewMode::Year,
             should_quit: false,
         }
+    }
+
+    fn set_view_mode(&mut self, view_mode: ViewMode) {
+        self.view_mode = view_mode;
     }
 
     fn toggle_selected_day(&mut self) {
@@ -89,6 +101,36 @@ impl App {
     fn move_cursor_down(&mut self) {
         self.cursor = self.cursor.checked_add_days(Days::new(1)).unwrap();
     }
+
+    fn move_cursor_left_month(&mut self) {
+        self.cursor = self.cursor.checked_sub_days(Days::new(1)).unwrap();
+    }
+
+    fn move_cursor_right_month(&mut self) {
+        self.cursor = self.cursor.checked_add_days(Days::new(1)).unwrap();
+    }
+
+    fn move_cursor_up_month(&mut self) {
+        self.cursor = self.cursor.checked_sub_days(Days::new(7)).unwrap();
+    }
+
+    fn move_cursor_down_month(&mut self) {
+        self.cursor = self.cursor.checked_add_days(Days::new(7)).unwrap();
+    }
+
+    fn next_month(&mut self) {
+        let (year, month) = (self.cursor.year(), self.cursor.month());
+        let next_month = if month == 12 { 1 } else { month + 1 };
+        let year = if month == 12 { year + 1 } else { year };
+        self.cursor = NaiveDate::from_ymd_opt(year, next_month, 1).unwrap();
+    }
+
+    fn prev_month(&mut self) {
+        let (year, month) = (self.cursor.year(), self.cursor.month());
+        let prev_month = if month == 1 { 12 } else { month - 1 };
+        let year = if month == 1 { year - 1 } else { year };
+        self.cursor = NaiveDate::from_ymd_opt(year, prev_month, 1).unwrap();
+    }
 }
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
@@ -99,10 +141,34 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
             match key.code {
                 KeyCode::Char('q') => app.should_quit = true,
                 KeyCode::Char(' ') => app.toggle_selected_day(),
-                KeyCode::Left => app.move_cursor_left(),
-                KeyCode::Right => app.move_cursor_right(),
-                KeyCode::Up => app.move_cursor_down(),
-                KeyCode::Down => app.move_cursor_up(),
+                KeyCode::Left => match app.view_mode {
+                    ViewMode::Year => app.move_cursor_left(),
+                    ViewMode::Month => app.move_cursor_left_month(),
+                },
+                KeyCode::Right => match app.view_mode {
+                    ViewMode::Year => app.move_cursor_right(),
+                    ViewMode::Month => app.move_cursor_right_month(),
+                },
+                KeyCode::Up => match app.view_mode {
+                    ViewMode::Year => app.move_cursor_up(),
+                    ViewMode::Month => app.move_cursor_up_month(),
+                },
+                KeyCode::Down => match app.view_mode {
+                    ViewMode::Year => app.move_cursor_down(),
+                    ViewMode::Month => app.move_cursor_down_month(),
+                },
+                KeyCode::PageUp => {
+                    if let ViewMode::Month = app.view_mode {
+                        app.prev_month()
+                    }
+                }
+                KeyCode::PageDown => {
+                    if let ViewMode::Month = app.view_mode {
+                        app.next_month()
+                    }
+                }
+                KeyCode::Char('y') => app.set_view_mode(ViewMode::Year),
+                KeyCode::Char('m') => app.set_view_mode(ViewMode::Month),
                 _ => {}
             }
         }
@@ -125,9 +191,11 @@ fn ui(f: &mut Frame, app: &App) {
         )
         .split(f.area());
 
-    let title_block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!("Year {}", Local::now().year()));
+    let title = match app.view_mode {
+        ViewMode::Year => format!("Year {}", app.cursor.year()),
+        ViewMode::Month => format!("{} {}", app.cursor.format("%B"), app.cursor.year()),
+    };
+    let title_block = Block::default().borders(Borders::ALL).title(title);
     f.render_widget(title_block, chunks[0]);
 
     let graph_chunks = Layout::default()
@@ -149,11 +217,22 @@ fn ui(f: &mut Frame, app: &App) {
     let graph_area = graph_block.inner(graph_chunks[1]);
     f.render_widget(graph_block, graph_chunks[1]);
 
-    let habit_graph = HabitGraph {
-        data: &app.alcohol_log,
-        cursor: app.cursor,
-    };
-    f.render_widget(habit_graph, graph_area);
+    match app.view_mode {
+        ViewMode::Year => {
+            let habit_graph = HabitGraph {
+                data: &app.alcohol_log,
+                cursor: app.cursor,
+            };
+            f.render_widget(habit_graph, graph_area);
+        }
+        ViewMode::Month => {
+            let month_view = MonthView {
+                data: &app.alcohol_log,
+                cursor: app.cursor,
+            };
+            f.render_widget(month_view, graph_area);
+        }
+    }
 
     let cursor_date = app.cursor.format("%A %d.%m.%Y").to_string();
     let cursor_date_paragraph = Paragraph::new(cursor_date).alignment(Alignment::Center);
@@ -161,7 +240,7 @@ fn ui(f: &mut Frame, app: &App) {
 
     let instructions_block = Block::default()
         .borders(Borders::ALL)
-        .title("Use arrow keys to move. Press <space> to toggle a day. Press <q> to quit.");
+        .title("Use arrow keys to move. Press <space> to toggle a day. Press <y> for year view, <m> for month view. Use <PageUp> and <PageDown> to switch months. Press <q> to quit.");
     f.render_widget(instructions_block, chunks[3]);
 
     let legend = Paragraph::new(Line::from(vec![
@@ -192,91 +271,178 @@ impl Widget for HabitGraph<'_> {
             return;
         }
 
-        let layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Min(0)])
-            .split(area);
-
-        let month_area = layout[0];
-        let graph_area = layout[1];
-
-        HabitGraph::render_month_labels(&self, month_area, buf);
-        HabitGraph::render_graph(&self, graph_area, buf);
+        self.render_graph(area, buf);
     }
 }
 
 impl HabitGraph<'_> {
-    fn render_month_labels(&self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
-        let months = [
-            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-        ];
-        let today = Local::now().date_naive();
-        let start_of_year = NaiveDate::from_ymd_opt(today.year(), 1, 1).unwrap();
-
-        let mut spans = vec![];
-        let mut last_month_week = start_of_year.iso_week().week();
-
-        for i in 0..12 {
-            let month = i + 1;
-            let month_date = NaiveDate::from_ymd_opt(today.year(), month, 1).unwrap();
-            let month_week = month_date.iso_week().week();
-
-            let week_diff = month_week - last_month_week;
-            if week_diff > 0 {
-                spans.push(Span::raw(" ".repeat(week_diff as usize * 2)));
-            }
-            spans.push(Span::styled(months[i as usize], Style::default()));
-            last_month_week = month_week;
-        }
-
-        Paragraph::new(Line::from(spans)).render(area, buf);
-    }
 
     fn render_graph(&self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
         let today = Local::now().date_naive();
-        let year = today.year();
-        let start_of_year = NaiveDate::from_ymd_opt(year, 1, 1).unwrap();
+        let year = self.cursor.year();
 
-        Canvas::default()
-            .marker(ratatui::symbols::Marker::Block)
-            .paint(|ctx| {
-                let mut current_date = start_of_year;
-                let mut week = 0.0;
-                while current_date.year() == year {
-                    let day_of_week = current_date.weekday().num_days_from_sunday() as f64;
+        let months_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(
+                [
+                    Constraint::Ratio(1, 12),
+                    Constraint::Ratio(1, 12),
+                    Constraint::Ratio(1, 12),
+                    Constraint::Ratio(1, 12),
+                    Constraint::Ratio(1, 12),
+                    Constraint::Ratio(1, 12),
+                    Constraint::Ratio(1, 12),
+                    Constraint::Ratio(1, 12),
+                    Constraint::Ratio(1, 12),
+                    Constraint::Ratio(1, 12),
+                    Constraint::Ratio(1, 12),
+                    Constraint::Ratio(1, 12),
+                ]
+                .as_ref(),
+            )
+            .split(area);
 
-                    let (symbol, mut color) = match self.data.get(&current_date) {
-                        Some(true) => ("■", Color::Red),
-                        Some(false) => ("■", Color::Green),
-                        None => ("□", Color::Rgb(50, 50, 50)), // No data
-                    };
+        for month in 1..=12 {
+            let month_area = months_layout[month as usize - 1];
+            let month_block = Block::default()
+                .borders(Borders::ALL)
+                .title(format!("{}", month));
+            let inner_area = month_block.inner(month_area);
+            month_block.render(month_area, buf);
 
-                    if current_date.day() == 1 {
-                        color = match self.data.get(&current_date) {
-                            Some(true) => Color::Rgb(255, 165, 0), // Orange for drank
-                            Some(false) => Color::Rgb(173, 255, 47), // GreenYellow for not drank
-                            None => Color::Yellow,
-                        };
-                    }
+            let first_day_of_month = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+            let (next_month_year, next_month) = if month == 12 {
+                (year + 1, 1)
+            } else {
+                (year, month + 1)
+            };
+            let last_day_of_month =
+                NaiveDate::from_ymd_opt(next_month_year, next_month, 1)
+                    .unwrap()
+                    .checked_sub_days(Days::new(1))
+                    .unwrap();
 
-                    if current_date == today {
-                        color = Color::Cyan;
-                    }
+            let mut current_date = first_day_of_month;
+            while current_date <= last_day_of_month {
+                let day_of_week = current_date.weekday().num_days_from_sunday() as u16;
+                let week_number = (current_date.day0() + first_day_of_month.weekday().num_days_from_sunday()) / 7;
 
-                    ctx.print(week, day_of_week, symbol.fg(color));
+                let (symbol, mut color) = match self.data.get(&current_date) {
+                    Some(true) => ("■", Color::Red),
+                    Some(false) => ("■", Color::Green),
+                    None => ("□", Color::Rgb(50, 50, 50)), // No data
+                };
 
-                    if current_date == self.cursor {
-                        ctx.print(week, day_of_week, "■".fg(Color::White));
-                    }
-
-                    if current_date.weekday() == Weekday::Sat {
-                        week += 1.0;
-                    }
-                    current_date = current_date.succ_opt().unwrap();
+                if current_date.day() == 1 {
+                    color = Color::Yellow;
                 }
-            })
-            .x_bounds([0.0, 52.0])
-            .y_bounds([0.0, 6.0])
-            .render(area, buf);
+
+                if current_date == today {
+                    color = Color::Cyan;
+                }
+
+                if current_date == self.cursor {
+                    color = Color::White;
+                }
+
+                buf.set_string(
+                    inner_area.x + day_of_week * 2,
+                    inner_area.y + week_number as u16,
+                    symbol,
+                    Style::default().fg(color),
+                );
+
+                current_date = current_date.succ_opt().unwrap();
+            }
+        }
+    }
+}
+
+struct MonthView<'a> {
+    data: &'a HashMap<NaiveDate, bool>,
+    cursor: NaiveDate,
+}
+
+impl Widget for MonthView<'_> {
+    fn render(self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
+        let block = Block::default().borders(Borders::ALL);
+        let inner_area = block.inner(area);
+        block.render(area, buf);
+
+        let today = Local::now().date_naive();
+        let year = self.cursor.year();
+        let month = self.cursor.month();
+
+        let first_day_of_month = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+        let (next_month_year, next_month) = if month == 12 {
+            (year + 1, 1)
+        } else {
+            (year, month + 1)
+        };
+        let last_day_of_month =
+            NaiveDate::from_ymd_opt(next_month_year, next_month, 1)
+                .unwrap()
+                .checked_sub_days(Days::new(1))
+                .unwrap();
+
+        let month_name = self.cursor.format("%B").to_string();
+        let title = format!("{} {}", month_name, year);
+        Paragraph::new(title)
+            .alignment(Alignment::Center)
+            .render(inner_area, buf);
+
+        let calendar_area = Rect {
+            x: inner_area.x + (inner_area.width - 28) / 2,
+            y: inner_area.y + 2,
+            width: 28,
+            height: 7,
+        };
+
+        let day_labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        for (i, label) in day_labels.iter().enumerate() {
+            buf.set_string(
+                calendar_area.x + i as u16 * 4,
+                calendar_area.y,
+                *label,
+                Style::default(),
+            );
+        }
+
+        let mut current_date = first_day_of_month;
+        while current_date <= last_day_of_month {
+            let week_day = current_date.weekday().num_days_from_sunday() as u16;
+            let week_number = (current_date.day0() + first_day_of_month.weekday().num_days_from_sunday()) / 7;
+
+            let (symbol, mut color) = match self.data.get(&current_date) {
+                Some(true) => ("■", Color::Red),
+                Some(false) => ("■", Color::Green),
+                None => (" ", Color::Rgb(50, 50, 50)),
+            };
+
+            if current_date == today {
+                color = Color::Cyan;
+            }
+
+            // draw the square
+            buf.set_string(
+                calendar_area.x + week_day * 4,
+                calendar_area.y + 2 + week_number as u16,
+                symbol,
+                Style::default().fg(color),
+            );
+
+            // draw the day number
+            buf.set_string(
+                calendar_area.x + week_day * 4,
+                calendar_area.y + 2 + week_number as u16,
+                format!("{:2}", current_date.day()),
+                if current_date == self.cursor {
+                    Style::default().fg(Color::Black).bg(Color::White)
+                } else {
+                    Style::default().fg(Color::White)
+                },
+            );
+            current_date = current_date.succ_opt().unwrap();
+        }
     }
 }
